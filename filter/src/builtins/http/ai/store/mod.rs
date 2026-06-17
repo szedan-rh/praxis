@@ -27,8 +27,8 @@ mod tests;
 use std::sync::Arc;
 
 use dashmap::{DashMap, mapref::entry::Entry};
-/// Validate a response-store table identifier.
-pub(crate) use schemas::validate_identifier as validate_table_identifier;
+/// Validate response-store table identifiers.
+pub(crate) use schemas::{validate_identifier as validate_table_identifier, validate_postgres_table_identifiers};
 
 #[allow(unused_imports, reason = "re-exports for upcoming store filter")]
 pub use self::{
@@ -49,6 +49,7 @@ pub use self::{
 /// [`HttpFilterContext`].
 ///
 /// [`HttpFilterContext`]: crate::HttpFilterContext
+#[derive(Clone)]
 pub struct ResponseStoreRegistry {
     /// Named store backends.
     #[allow(clippy::type_complexity, reason = "DashMap of trait objects is inherently verbose")]

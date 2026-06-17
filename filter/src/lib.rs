@@ -25,6 +25,8 @@ pub use actions::{FilterAction, Rejection};
 pub use any_filter::AnyFilter;
 pub use body::{BodyAccess, BodyBuffer, BodyBufferOverflow, BodyCapabilities, BodyMode};
 #[cfg(feature = "ai-inference")]
+pub use builtins::AnthropicMessagesFormatFilter;
+#[cfg(feature = "ai-inference")]
 pub use builtins::OpenaiResponsesValidateFilter;
 #[cfg(feature = "ai-inference")]
 pub use builtins::PromptEnrichFilter;
@@ -273,6 +275,7 @@ pub(crate) mod test_utils {
             branch_iterations: std::collections::HashMap::new(),
             client_addr: None,
             cluster: None,
+            current_filter_id: None,
             downstream_tls: false,
             executed_filter_indices: Vec::new(),
             extra_request_headers: Vec::new(),
@@ -280,6 +283,7 @@ pub(crate) mod test_utils {
             request_headers_to_set: Vec::new(),
             filter_metadata: std::collections::HashMap::new(),
             filter_results: std::collections::HashMap::new(),
+            filter_state: std::collections::HashMap::new(),
             health_registry: None,
             id_generator: &TEST_ID_GENERATOR,
             kv_stores: None,
