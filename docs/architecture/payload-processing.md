@@ -30,7 +30,7 @@ Two delivery modes:
   limit by default; an optional `max_bytes` returns 413
   when exceeded. Enables streaming inspection with deferred
   forwarding for protocol parsing, body-based routing, and
-  Security systems use cases including content scanning,
+  security use cases including content scanning,
   payload inspection, and body-based routing.
 
 When StreamBuffer mode is active, the protocol layer
