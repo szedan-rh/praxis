@@ -34,7 +34,7 @@ compose a bespoke proxy server from the same primitives.
 ### Protocol Adapters
 
 Adapters translate upstream library callbacks into pipeline
-invocations. When feasible Praxis owns no protocol logic,
+invocations. When feasible, Praxis owns no protocol logic,
 instead handing it off to well-maintained and battle-tested
 upstream solutions.
 
@@ -44,9 +44,10 @@ TCP   --> praxis-protocol/tcp   --> Pingora
 QUIC  --> praxis-protocol/http3 --> Quiche  (planned, not yet implemented)
 ```
 
-These adapters are modular, it's intended to enable adding new protocols by
-writing new adapters, and even having multiple implementations of a single
-protocol that can be swapped via build features or runtime configuration.
+These adapters are modular. The design enables adding new
+protocols by writing new adapters, and even having multiple
+implementations of a single protocol that can be swapped via
+build features or runtime configuration.
 
 ### Filter-First Design
 
