@@ -23,16 +23,17 @@ use std::{
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode, Uri};
 use praxis_filter::parse_filter_config;
-use crate::proto::envoy::service::{
-    common::v3::{HeaderValue, HeaderValueOption, HttpStatus},
-    ext_proc::v3::{
-        CommonResponse, HeaderMutation, HeadersResponse, HttpBody, HttpHeaders, HttpTrailers,
-        ImmediateResponse,
-    },
-};
 
 use super::*;
-use crate::duplex::{ExchangeConfig, ExchangeError, ExchangeEvent, ExtProcExchange};
+use crate::{
+    duplex::{ExchangeConfig, ExchangeError, ExchangeEvent, ExtProcExchange},
+    proto::envoy::service::{
+        common::v3::{HeaderValue, HeaderValueOption, HttpStatus},
+        ext_proc::v3::{
+            CommonResponse, HeaderMutation, HeadersResponse, HttpBody, HttpHeaders, HttpTrailers, ImmediateResponse,
+        },
+    },
+};
 
 // -----------------------------------------------------------------------------
 // Config Parsing
@@ -2136,13 +2137,14 @@ fn minimal_config() -> ExtProcConfig {
 use std::{net::SocketAddr, pin::Pin};
 
 use async_trait::async_trait;
+use tokio::sync::oneshot;
+use tokio_stream::Stream;
+
 use crate::proto::envoy::service::ext_proc::v3::{
     BodyResponse, ProcessingRequest, ProcessingResponse, ProtocolConfiguration, TrailersResponse,
     external_processor_server::{ExternalProcessor, ExternalProcessorServer},
     processing_request, processing_response,
 };
-use tokio::sync::oneshot;
-use tokio_stream::Stream;
 
 /// Configurable behavior for the mock external processor.
 #[derive(Clone)]
@@ -3374,24 +3376,23 @@ async fn duplex_concurrent_exchanges_no_crosstalk() {
         handles.push(tokio::spawn(async move {
             let mut exchange = ExtProcExchange::open(channel, &default_exchange_config()).unwrap();
             let unique_id = format!("exchange-{i}");
-            let headers =
-                processing_request::Request::RequestHeaders(HttpHeaders {
-                    headers: Some(proto::envoy::service::ext_proc::v3::HeaderMap {
-                        headers: vec![
-                            HeaderValue {
-                                key: ":method".to_owned(),
-                                value: "GET".to_owned(),
-                                raw_value: Vec::new(),
-                            },
-                            HeaderValue {
-                                key: "x-exchange-id".to_owned(),
-                                value: unique_id.clone(),
-                                raw_value: Vec::new(),
-                            },
-                        ],
-                    }),
-                    end_of_stream: false,
-                });
+            let headers = processing_request::Request::RequestHeaders(HttpHeaders {
+                headers: Some(proto::envoy::service::ext_proc::v3::HeaderMap {
+                    headers: vec![
+                        HeaderValue {
+                            key: ":method".to_owned(),
+                            value: "GET".to_owned(),
+                            raw_value: Vec::new(),
+                        },
+                        HeaderValue {
+                            key: "x-exchange-id".to_owned(),
+                            value: unique_id.clone(),
+                            raw_value: Vec::new(),
+                        },
+                    ],
+                }),
+                end_of_stream: false,
+            });
             exchange.send(headers).await.unwrap();
             let resp = exchange.receive().await.unwrap();
             if let ExchangeEvent::RequestHeaders { response: hr, .. } = &resp
@@ -3780,10 +3781,9 @@ async fn duplex_request_trailers_send_and_classify() {
     exchange.send(make_request_headers()).await.unwrap();
     let _hdr = exchange.receive().await.unwrap();
 
-    let trailers =
-        processing_request::Request::RequestTrailers(HttpTrailers {
-            trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
-        });
+    let trailers = processing_request::Request::RequestTrailers(HttpTrailers {
+        trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
+    });
     exchange.send(trailers).await.unwrap();
     let event = exchange.receive().await.unwrap();
     assert!(
@@ -4113,10 +4113,9 @@ async fn duplex_response_trailers_send_and_classify() {
     exchange.send(make_response_headers()).await.unwrap();
     let _resp_hdr = exchange.receive().await.unwrap();
 
-    let trailers =
-        processing_request::Request::ResponseTrailers(HttpTrailers {
-            trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
-        });
+    let trailers = processing_request::Request::ResponseTrailers(HttpTrailers {
+        trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
+    });
     exchange.send(trailers).await.unwrap();
     let event = exchange.receive().await.unwrap();
     assert!(
@@ -4799,10 +4798,9 @@ async fn duplex_full_duplex_trailers_while_deferred() {
     exchange.send(make_request_body(b"chunk1", false)).await.unwrap();
     exchange.send(make_request_body(b"chunk2", false)).await.unwrap();
 
-    let trailers =
-        processing_request::Request::RequestTrailers(HttpTrailers {
-            trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
-        });
+    let trailers = processing_request::Request::RequestTrailers(HttpTrailers {
+        trailers: Some(proto::envoy::service::ext_proc::v3::HeaderMap { headers: vec![] }),
+    });
     exchange.send(trailers).await.unwrap();
 
     let r1 = exchange.receive().await.unwrap();
@@ -6148,12 +6146,10 @@ async fn duplex_cross_direction_started_non_fd_duplicate_body_rejected() {
     let _resh = exchange.receive().await.unwrap();
 
     exchange
-        .send(processing_request::Request::ResponseBody(
-            HttpBody {
-                body: b"resp_body".to_vec(),
-                end_of_stream: false,
-            },
-        ))
+        .send(processing_request::Request::ResponseBody(HttpBody {
+            body: b"resp_body".to_vec(),
+            end_of_stream: false,
+        }))
         .await
         .unwrap();
     let _resb = exchange.receive().await.unwrap();

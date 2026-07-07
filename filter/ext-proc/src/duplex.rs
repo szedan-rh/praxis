@@ -43,15 +43,17 @@
 
 use std::time::Duration;
 
-use crate::proto::envoy::service::ext_proc::v3::{
-    BodyResponse, HeadersResponse, ImmediateResponse, ProcessingRequest, ProcessingResponse, ProtocolConfiguration,
-    TrailersResponse, external_processor_client::ExternalProcessorClient, processing_request, processing_response,
-};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 
-use crate::BodySendMode;
+use crate::{
+    BodySendMode,
+    proto::envoy::service::ext_proc::v3::{
+        BodyResponse, HeadersResponse, ImmediateResponse, ProcessingRequest, ProcessingResponse, ProtocolConfiguration,
+        TrailersResponse, external_processor_client::ExternalProcessorClient, processing_request, processing_response,
+    },
+};
 
 // -----------------------------------------------------------------------------
 // Constants

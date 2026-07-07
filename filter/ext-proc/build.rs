@@ -24,10 +24,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("cargo:rerun-if-changed=build.rs");
     for entry in walkdir(&cwd.join("proto"))? {
-        println!(
-            "cargo:rerun-if-changed={}",
-            entry.to_str().expect("proto path is valid UTF-8")
-        );
+        if let Some(path) = entry.to_str() {
+            println!("cargo:rerun-if-changed={path}");
+        }
     }
 
     Ok(())

@@ -8,6 +8,11 @@
 //!
 //! Compiled from vendored `.proto` files at build time.
 
+#[allow(
+    clippy::allow_attributes,
+    clippy::missing_docs_in_private_items,
+    reason = "generated protobuf module tree"
+)]
 pub(crate) mod envoy {
     pub(crate) mod service {
         pub(crate) mod common {
@@ -17,12 +22,18 @@ pub(crate) mod envoy {
                 unreachable_pub,
                 trivial_casts,
                 unused_qualifications,
-                clippy::doc_markdown,
+                clippy::allow_attributes,
+                clippy::allow_attributes_without_reason,
+                clippy::clone_on_ref_ptr,
+                clippy::default_trait_access,
                 clippy::derive_partial_eq_without_eq,
                 clippy::doc_lazy_continuation,
+                clippy::doc_markdown,
                 clippy::enum_variant_names,
+                clippy::missing_docs_in_private_items,
                 clippy::needless_borrows_for_generic_args,
-                clippy::default_trait_access,
+                clippy::too_many_lines,
+                clippy::trivially_copy_pass_by_ref,
                 reason = "generated protobuf code"
             )]
             pub mod v3 {
@@ -37,12 +48,18 @@ pub(crate) mod envoy {
                 unreachable_pub,
                 trivial_casts,
                 unused_qualifications,
-                clippy::doc_markdown,
+                clippy::allow_attributes,
+                clippy::allow_attributes_without_reason,
+                clippy::clone_on_ref_ptr,
+                clippy::default_trait_access,
                 clippy::derive_partial_eq_without_eq,
                 clippy::doc_lazy_continuation,
+                clippy::doc_markdown,
                 clippy::enum_variant_names,
+                clippy::missing_docs_in_private_items,
                 clippy::needless_borrows_for_generic_args,
-                clippy::default_trait_access,
+                clippy::too_many_lines,
+                clippy::trivially_copy_pass_by_ref,
                 reason = "generated protobuf code"
             )]
             pub mod v3 {

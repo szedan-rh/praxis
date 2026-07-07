@@ -16,12 +16,14 @@ use std::borrow::Cow;
 
 use bytes::Bytes;
 use praxis_filter::{FilterAction, HttpFilterContext, Rejection};
-use crate::proto::envoy::service::{
-    common::v3::{HeaderValue, HeaderValueOption},
-    ext_proc::v3::{HeaderMutation, HeadersResponse, HttpHeaders, ImmediateResponse},
-};
 
-use crate::Phase;
+use crate::{
+    Phase,
+    proto::envoy::service::{
+        common::v3::{HeaderValue, HeaderValueOption},
+        ext_proc::v3::{HeaderMutation, HeadersResponse, HttpHeaders, ImmediateResponse},
+    },
+};
 
 // -----------------------------------------------------------------------------
 // Request → Proto
