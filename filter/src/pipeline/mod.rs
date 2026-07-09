@@ -1,7 +1,34 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024 Praxis Contributors
 
-//! Filter pipeline: ordered chain of filters executed on each request.
+//! Filter pipeline engine: the runtime representation of a listener's
+//! filter processing.
+//!
+//! ## Module Layout
+//!
+//! | Module | Responsibility |
+//! |---|---|
+//! | [`build`] | `FilterPipeline` construction from config entries |
+//! | [`build_branch`] | Recursive branch chain resolution |
+//! | [`http`] | Request, response, and body execution loops |
+//! | [`tcp`] | Connect/disconnect execution |
+//! | [`evaluate`] | Branch condition checking and dispatch |
+//! | [`branch`] | Runtime branch types ([`ResolvedBranch`], [`BranchOutcome`]) |
+//! | [`filter`] | [`PipelineFilter`] — the per-filter wrapper |
+//! | [`body`] | Body chunk processing utilities |
+//! | [`checks`] | Ordering validation (router before LB, etc.) |
+//! | [`clusters`] | Cluster reference collection |
+//! | [`extension`] | [`PipelineExtension`] trait for injecting per-request resources |
+//!
+//! At runtime, chains do not exist. All listener chains are
+//! concatenated into a flat `Vec<PipelineFilter>`. Branch chains are
+//! stored as nested `Vec<PipelineFilter>` inside each filter's
+//! [`branches`] field.
+//!
+//! [`ResolvedBranch`]: branch::ResolvedBranch
+//! [`BranchOutcome`]: branch::BranchOutcome
+//! [`PipelineFilter`]: filter::PipelineFilter
+//! [`branches`]: filter::PipelineFilter::branches
 
 pub(crate) mod body;
 pub(crate) mod branch;

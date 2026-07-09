@@ -67,6 +67,12 @@ impl FilterPipeline {
     /// filter entry into runtime `ResolvedBranch` types using
     /// the provided chain lookup table.
     ///
+    /// The `chains` parameter is the **top-level** chain lookup
+    /// table (all `filter_chains` from the config), used to
+    /// resolve `ChainRef::Named` entries inside branch
+    /// configurations. The actual filters for this pipeline come
+    /// from `entries`.
+    ///
     /// # Errors
     ///
     /// Returns [`FilterError`] if any filter fails to instantiate

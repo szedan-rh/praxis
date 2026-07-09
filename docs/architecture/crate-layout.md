@@ -124,9 +124,14 @@ praxis-filter                   Filter pipeline engine
 ├── registry                    FilterRegistry: name -> factory map
 ├── pipeline/                   Pipeline execution engine
 │   ├── body                    Body chunk processing and buffer management
+│   ├── branch                  Runtime branch types (ResolvedBranch, BranchOutcome)
 │   ├── build                   Pipeline construction and body capability computation
+│   ├── build_branch            Recursive branch chain resolution (config to runtime)
 │   ├── checks                  Pipeline validation (protocol compatibility)
 │   ├── clusters                Cluster reference collection from filters
+│   ├── evaluate                Branch condition checking and dispatch
+│   ├── extension               PipelineExtension trait for per-request injection
+│   ├── filter                  PipelineFilter: per-filter wrapper with conditions/branches
 │   ├── http                    HTTP request/response/body pipeline
 │   ├── http_utils              Shared HTTP pipeline utilities
 │   ├── tcp                     TCP connect/disconnect pipeline

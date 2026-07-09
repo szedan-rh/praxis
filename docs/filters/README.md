@@ -54,8 +54,12 @@ influence downstream processing:
 - `ctx.request_headers_to_remove`: remove headers from the
   upstream request.
 - `ctx.filter_metadata`: write durable per-request metadata.
-- `ctx.filter_results`: write results for branch chain
-  evaluation.
+- `ctx.filter_results`: write key-value results for
+  [branch chain](branch-chains.md) evaluation. Results
+  are keyed by the filter's TYPE name (the return value
+  of `HttpFilter::name()`). See
+  [Pipeline Concepts: Filter Results](../architecture/pipeline-concepts.md#filter-results)
+  for the full lifecycle.
 - `ctx.response_header`: mutate response headers directly
   in `on_response`.
 - `ctx.response_headers_modified`: flag that response
@@ -126,6 +130,11 @@ flowchart LR
 This enables reuse without duplication. A "security" chain
 can be shared across public listeners while internal
 listeners skip it entirely.
+
+For conditional branching within pipelines, see
+[Branch Chains](branch-chains.md). For the full mental
+model of how chains become pipelines, see
+[Pipeline Concepts](../architecture/pipeline-concepts.md).
 
 ### Protocol-Specific Filters
 
