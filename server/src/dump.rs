@@ -3,7 +3,7 @@
 
 //! `--dump` output: serializable effective configuration with resolved top-level listener chains.
 
-use std::{collections::HashMap, io::Write as _};
+use std::collections::HashMap;
 
 use praxis_core::config::{ChainRef, Config, FailureMode, FilterEntry};
 use serde::Serialize;
@@ -231,14 +231,17 @@ fn build_resolved_filters(
     Ok(filters)
 }
 
-/// Serialize the dump to YAML and write it to stdout.
+/// Serialize the dump to YAML and write it to the given writer.
 ///
 /// # Errors
 ///
-/// Returns an error if YAML serialization or stdout write fails.
-pub(crate) fn write_dump(dump: &EffectiveConfigDump) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// Returns an error if YAML serialization or writing fails.
+pub(crate) fn write_dump(
+    dump: &EffectiveConfigDump,
+    writer: &mut impl std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let yaml = serde_yaml::to_string(dump)?;
-    std::io::stdout().lock().write_all(yaml.as_bytes())?;
+    writer.write_all(yaml.as_bytes())?;
     Ok(())
 }
 
@@ -650,6 +653,28 @@ filter_chains:
             nested_password.as_str(),
             Some("[REDACTED]"),
             "nested password field must be redacted"
+        );
+    }
+
+    #[test]
+    fn write_dump_produces_valid_yaml() {
+        let config = Config::from_yaml(ORDERED_CHAINS_YAML).unwrap();
+        let dump = build_dump(&config, "test.yaml").unwrap();
+
+        let mut buf = Vec::new();
+        write_dump(&dump, &mut buf).unwrap();
+
+        let output = String::from_utf8(buf).expect("dump output should be valid UTF-8");
+        let reparsed: serde_yaml::Value =
+            serde_yaml::from_str(&output).expect("dump output should be valid YAML");
+        let mapping = reparsed.as_mapping().expect("dump should be a YAML mapping");
+        assert!(
+            mapping.contains_key(&serde_yaml::Value::String("config_source".to_owned())),
+            "dump must contain config_source key"
+        );
+        assert!(
+            mapping.contains_key(&serde_yaml::Value::String("resolved_listeners".to_owned())),
+            "dump must contain resolved_listeners key"
         );
     }
 

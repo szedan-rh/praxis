@@ -55,7 +55,7 @@ pub(crate) fn run_dump(explicit: Option<&str>) -> Result<(), Box<dyn std::error:
         None => default_config_source(),
     };
     let dump_model = dump::build_dump(&config, &source)?;
-    dump::write_dump(&dump_model)
+    dump::write_dump(&dump_model, &mut std::io::stdout().lock())
 }
 
 /// Determine the human-readable label for implicit config sources.
