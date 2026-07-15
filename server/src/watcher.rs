@@ -13,7 +13,7 @@ use std::{
     hash::Hasher as _,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
@@ -22,7 +22,7 @@ use praxis_filter::FilterRegistry;
 use praxis_protocol::ListenerPipelines;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::reload::reload_pipelines;
 
@@ -32,6 +32,12 @@ use crate::reload::reload_pipelines;
 
 /// Debounce window for filesystem events.
 const DEBOUNCE_MS: u64 = 500;
+
+/// Initial backoff delay (in seconds) after a config reload failure.
+const BACKOFF_BASE_SECS: u64 = 1;
+
+/// Maximum backoff delay (in seconds) between reload attempts.
+const BACKOFF_MAX_SECS: u64 = 60;
 
 /// Test-only startup wait for the background notify watcher.
 #[cfg(test)]
@@ -112,12 +118,34 @@ async fn watch_loop(params: WatcherParams) {
 async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
     let mut current_config = params.initial_config.clone();
     let mut content_hash = std::fs::read_to_string(&params.config_path).map_or(0, |c| hash_content(&c));
+    let mut consecutive_failures: u32 = 0;
+    let mut last_failure: Option<Instant> = None;
+
     loop {
         tokio::select! {
             Some(()) = rx.recv() => {
-                tracing::debug!(debounce_ms = DEBOUNCE_MS, "config file change detected, debouncing");
+                tracing::debug!(
+                    debounce_ms = DEBOUNCE_MS,
+                    "config file change detected, debouncing",
+                );
                 drain_and_debounce(rx).await;
-                handle_reload(
+
+                if let Some(last) = last_failure {
+                    let backoff = backoff_duration(consecutive_failures);
+                    let elapsed = last.elapsed();
+                    if elapsed < backoff {
+                        let remaining = backoff - elapsed;
+                        warn!(
+                            consecutive_failures,
+                            backoff_secs = backoff.as_secs(),
+                            remaining_secs = remaining.as_secs(),
+                            "config reload skipped, backing off after repeated failures",
+                        );
+                        continue;
+                    }
+                }
+
+                let ok = handle_reload(
                     &params.config_path,
                     &mut current_config,
                     &mut content_hash,
@@ -126,6 +154,14 @@ async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
                     &params.health_shutdown,
                     &params.kv_stores,
                 );
+
+                if ok {
+                    consecutive_failures = 0;
+                    last_failure = None;
+                } else {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    last_failure = Some(Instant::now());
+                }
             }
             () = params.shutdown.cancelled() => {
                 info!("config file watcher shutting down");
@@ -136,6 +172,9 @@ async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
 }
 
 /// Read the config file and reload pipelines if content has changed.
+///
+/// Returns `true` when the reload succeeds or when content is unchanged
+/// (no-op). Returns `false` on any error (read, parse, pipeline build).
 #[expect(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -149,7 +188,7 @@ fn handle_reload(
     pipelines: &ListenerPipelines,
     health_shutdown: &Arc<Mutex<CancellationToken>>,
     kv_stores: &praxis_core::kv::KvStoreRegistry,
-) {
+) -> bool {
     let content = match std::fs::read_to_string(config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -158,14 +197,14 @@ fn handle_reload(
                 error = %e,
                 "failed to read config file for reload"
             );
-            return;
+            return false;
         },
     };
 
     let new_hash = hash_content(&content);
     if new_hash == *content_hash {
         tracing::debug!("config file content unchanged, skipping reload");
-        return;
+        return true;
     }
 
     let new_config = match Config::from_yaml(&content) {
@@ -176,7 +215,7 @@ fn handle_reload(
                 error = %e,
                 "config reload failed: invalid config"
             );
-            return;
+            return false;
         },
     };
 
@@ -191,9 +230,11 @@ fn handle_reload(
         Ok(()) => {
             *current_config = new_config;
             *content_hash = new_hash;
+            true
         },
         Err(e) => {
             error!(error = %e, "config reload failed");
+            false
         },
     }
 }
@@ -238,6 +279,23 @@ fn watch_dir_for_path(path: &std::path::Path) -> PathBuf {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf()
+}
+
+/// Compute the backoff duration for a given consecutive failure count.
+///
+/// Starts at [`BACKOFF_BASE_SECS`] and doubles with each subsequent
+/// failure, capped at [`BACKOFF_MAX_SECS`].
+///
+/// ```
+/// # use std::time::Duration;
+/// // First failure → 1s, second → 2s, third → 4s, ...
+/// ```
+fn backoff_duration(consecutive_failures: u32) -> Duration {
+    let exp = consecutive_failures.saturating_sub(1).min(63);
+    let secs = BACKOFF_BASE_SECS
+        .saturating_mul(1u64.checked_shl(exp).unwrap_or(u64::MAX))
+        .min(BACKOFF_MAX_SECS);
+    Duration::from_secs(secs)
 }
 
 /// Compute a hash of file content for change detection.
@@ -407,6 +465,7 @@ mod tests {
             "pipeline should be untouched after invalid config"
         );
 
+        std::thread::sleep(Duration::from_secs(BACKOFF_BASE_SECS));
         std::fs::write(&config_path, VALID_YAML_CHANGED).unwrap();
 
         poll_until(Duration::from_secs(5), || {
@@ -464,8 +523,8 @@ mod tests {
             shutdown: shutdown.clone(),
         });
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while std::time::Instant::now() < deadline {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
             assert!(
                 !handle.is_finished(),
@@ -543,14 +602,65 @@ mod tests {
         shutdown.cancel();
     }
 
+    #[test]
+    fn backoff_duration_starts_at_base() {
+        assert_eq!(
+            backoff_duration(1),
+            Duration::from_secs(BACKOFF_BASE_SECS),
+            "first failure should use base backoff"
+        );
+    }
+
+    #[test]
+    fn backoff_duration_doubles_each_failure() {
+        assert_eq!(
+            backoff_duration(2),
+            Duration::from_secs(2),
+            "second failure should double"
+        );
+        assert_eq!(
+            backoff_duration(3),
+            Duration::from_secs(4),
+            "third failure should be 4s"
+        );
+        assert_eq!(
+            backoff_duration(4),
+            Duration::from_secs(8),
+            "fourth failure should be 8s"
+        );
+    }
+
+    #[test]
+    fn backoff_duration_caps_at_max() {
+        assert_eq!(
+            backoff_duration(7),
+            Duration::from_secs(BACKOFF_MAX_SECS),
+            "large failure counts should cap at max"
+        );
+        assert_eq!(
+            backoff_duration(100),
+            Duration::from_secs(BACKOFF_MAX_SECS),
+            "very large failure counts should cap at max"
+        );
+    }
+
+    #[test]
+    fn backoff_duration_zero_failures() {
+        assert_eq!(
+            backoff_duration(0),
+            Duration::from_secs(BACKOFF_BASE_SECS),
+            "zero failures should still use base backoff"
+        );
+    }
+
     // -------------------------------------------------------------------------
     // Test Utilities
     // -------------------------------------------------------------------------
 
     /// Poll `predicate` every 20ms until it returns `true` or `timeout` elapses.
     fn poll_until(timeout: Duration, predicate: impl Fn() -> bool) {
-        let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
             if predicate() {
                 return;
             }
