@@ -142,6 +142,9 @@ fn tcp_listener_tls_end_to_end() {
 
     let yaml = format!(
         r#"
+insecure_options:
+  allow_private_upstreams: true
+
 listeners:
   - name: secure-tcp
     address: "127.0.0.1:{proxy_port}"
@@ -722,6 +725,9 @@ fn tcp_listener_mtls_require_valid_client_cert_succeeds() {
 
     let yaml = format!(
         r#"
+insecure_options:
+  allow_private_upstreams: true
+
 listeners:
   - name: secure-tcp
     address: "127.0.0.1:{proxy_port}"

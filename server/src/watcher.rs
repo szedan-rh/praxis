@@ -206,6 +206,7 @@ fn handle_reload(
         tracing::debug!("config file content unchanged, skipping reload");
         return true;
     }
+    *content_hash = new_hash;
 
     let new_config = match Config::from_yaml(&content) {
         Ok(c) => c,
@@ -229,7 +230,6 @@ fn handle_reload(
     ) {
         Ok(()) => {
             *current_config = new_config;
-            *content_hash = new_hash;
             true
         },
         Err(e) => {
