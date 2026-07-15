@@ -274,9 +274,25 @@ macro_rules! insecure_flag_pairs {
 ///
 /// [`InsecureOptions`]: praxis_core::config::InsecureOptions
 fn warn_insecure_option_escalations(old: &Config, new: &Config) {
-    let escalated: Vec<&str> = insecure_flag_pairs!(
-        old.insecure_options,
-        new.insecure_options,
+    let escalated = collect_escalated_flags(&old.insecure_options, &new.insecure_options);
+
+    if !escalated.is_empty() {
+        warn!(
+            options = ?escalated,
+            "insecure options escalated during reload; \
+             security overrides were newly enabled"
+        );
+    }
+}
+
+/// Collect names of insecure flags that transitioned from `false` to `true`.
+fn collect_escalated_flags<'a>(
+    old: &praxis_core::config::InsecureOptions,
+    new: &praxis_core::config::InsecureOptions,
+) -> Vec<&'a str> {
+    insecure_flag_pairs!(
+        old,
+        new,
         [
             allow_open_security_filters,
             allow_private_endpoints,
@@ -292,15 +308,7 @@ fn warn_insecure_option_escalations(old: &Config, new: &Config) {
     .into_iter()
     .filter(|(_, old_val, new_val)| !old_val && *new_val)
     .map(|(name, ..)| name)
-    .collect();
-
-    if !escalated.is_empty() {
-        warn!(
-            options = ?escalated,
-            "insecure options escalated during reload; \
-             security overrides were newly enabled"
-        );
-    }
+    .collect()
 }
 
 // -----------------------------------------------------------------------------
@@ -360,7 +368,10 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use praxis_core::{config::Config, health::HealthRegistry};
+    use praxis_core::{
+        config::{Config, InsecureOptions},
+        health::HealthRegistry,
+    };
     use praxis_filter::FilterRegistry;
     use tokio_util::sync::CancellationToken;
 
@@ -796,81 +807,84 @@ filter_chains:
     }
 
     #[test]
-    fn insecure_option_escalation_detected() {
-        let old = valid_config();
-        let new = Config::from_yaml(
-            r#"
-listeners:
-  - name: web
-    address: "127.0.0.1:8080"
-    filter_chains: [main]
-insecure_options:
-  allow_root: true
-filter_chains:
-  - name: main
-    filters:
-      - filter: static_response
-        status: 200
-"#,
-        )
-        .unwrap();
+    fn escalation_single_flag_detected() {
+        let old = InsecureOptions::default();
+        let mut new = InsecureOptions::default();
+        new.allow_root = true;
 
-        warn_insecure_option_escalations(&old, &new);
+        let escalated = collect_escalated_flags(&old, &new);
+        assert_eq!(
+            escalated,
+            vec!["allow_root"],
+            "single escalated flag should be reported"
+        );
     }
 
     #[test]
-    fn insecure_option_multiple_escalations_detected() {
-        let old = valid_config();
-        let new = Config::from_yaml(
-            r#"
-listeners:
-  - name: web
-    address: "127.0.0.1:8080"
-    filter_chains: [main]
-insecure_options:
-  allow_root: true
-  skip_pipeline_validation: true
-  allow_public_admin: true
-filter_chains:
-  - name: main
-    filters:
-      - filter: static_response
-        status: 200
-"#,
-        )
-        .unwrap();
+    fn escalation_multiple_flags_detected() {
+        let old = InsecureOptions::default();
+        let mut new = InsecureOptions::default();
+        new.allow_public_admin = true;
+        new.allow_root = true;
+        new.skip_pipeline_validation = true;
 
-        warn_insecure_option_escalations(&old, &new);
+        let escalated = collect_escalated_flags(&old, &new);
+        assert_eq!(
+            escalated,
+            vec!["allow_public_admin", "allow_root", "skip_pipeline_validation"],
+            "all escalated flags should be reported in declaration order"
+        );
     }
 
     #[test]
-    fn insecure_option_no_escalation_when_unchanged() {
-        let config = valid_config();
-        warn_insecure_option_escalations(&config, &config);
+    fn no_escalation_when_identical() {
+        let opts = InsecureOptions::default();
+        let escalated = collect_escalated_flags(&opts, &opts);
+        assert!(escalated.is_empty(), "identical options should produce no escalations");
     }
 
     #[test]
-    fn insecure_option_deescalation_not_flagged() {
-        let old = Config::from_yaml(
-            r#"
-listeners:
-  - name: web
-    address: "127.0.0.1:8080"
-    filter_chains: [main]
-insecure_options:
-  allow_root: true
-  skip_pipeline_validation: true
-filter_chains:
-  - name: main
-    filters:
-      - filter: static_response
-        status: 200
-"#,
-        )
-        .unwrap();
-        let new = valid_config();
+    fn deescalation_not_flagged() {
+        let mut old = InsecureOptions::default();
+        old.allow_root = true;
+        old.skip_pipeline_validation = true;
+        let new = InsecureOptions::default();
 
-        warn_insecure_option_escalations(&old, &new);
+        let escalated = collect_escalated_flags(&old, &new);
+        assert!(escalated.is_empty(), "true-to-false transitions should not be flagged");
+    }
+
+    #[test]
+    fn escalation_only_newly_enabled_reported() {
+        let mut old = InsecureOptions::default();
+        old.allow_root = true;
+        let mut new = InsecureOptions::default();
+        new.allow_root = true;
+        new.skip_pipeline_validation = true;
+
+        let escalated = collect_escalated_flags(&old, &new);
+        assert_eq!(
+            escalated,
+            vec!["skip_pipeline_validation"],
+            "only newly enabled flags should be reported"
+        );
+    }
+
+    #[test]
+    fn no_escalation_when_all_already_true() {
+        let mut opts = InsecureOptions::default();
+        opts.allow_open_security_filters = true;
+        opts.allow_private_endpoints = true;
+        opts.allow_private_health_checks = true;
+        opts.allow_public_admin = true;
+        opts.allow_root = true;
+        opts.allow_tls_without_sni = true;
+        opts.allow_unbounded_body = true;
+        opts.csrf_log_only = true;
+        opts.skip_pipeline_validation = true;
+
+        let escalated = collect_escalated_flags(&opts, &opts);
+        assert!(escalated.is_empty(), "already-true flags should not be reported");
     }
 
     // -------------------------------------------------------------------------

@@ -221,18 +221,43 @@ impl HttpFilter for RedirectFilter {
 ///
 /// # Security
 ///
-/// `${host}` is populated from the request `Host` header without
-/// validation. Templates using `${host}` should only be deployed
-/// behind host-constrained listeners to prevent open redirect.
+/// `${host}` is validated before substitution to prevent open
+/// redirects via crafted `Host` headers. Only hostname-safe
+/// characters are permitted; invalid values leave the `${host}`
+/// placeholder unexpanded.
 fn expand_location(template: &str, path: &str, query: Option<&str>, host: Option<&str>, scheme: &str) -> String {
     let safe_path = crate::builtins::http::transformation::path_sanitize::normalize_rewritten_path(path);
     let mut result = template.replace("${path}", &safe_path);
     let query_with_prefix = query.map_or(String::new(), |q| format!("?{q}"));
     result = result.replace("${query}", &query_with_prefix);
     if let Some(h) = host {
-        result = result.replace("${host}", h);
+        if is_valid_host_for_redirect(h) {
+            result = result.replace("${host}", h);
+        } else {
+            tracing::warn!(host = h, "redirect: rejected invalid host value");
+        }
     }
     result.replace("${scheme}", scheme)
+}
+
+/// Check whether a host value is safe for redirect URL substitution.
+///
+/// Allows only hostname-safe ASCII characters: alphanumeric, `.`, `-`,
+/// `_`, `[`, `]`, `:` (IPv6), and `%` (IPv6 zone IDs). Rejects
+/// characters that could enable open redirects (`/`, `@`, `\`) or
+/// header injection (whitespace, control characters).
+fn is_valid_host_for_redirect(host: &str) -> bool {
+    !host.is_empty()
+        && host.bytes().all(|b| {
+            matches!(b,
+                b'a'..=b'z'
+                | b'A'..=b'Z'
+                | b'0'..=b'9'
+                | b'-' | b'.' | b'_'
+                | b'[' | b']' | b':'
+                | b'%'
+            )
+        })
 }
 
 /// Strip port from a `Host` header value, handling IPv4 and bracketed IPv6.
@@ -694,6 +719,123 @@ mod tests {
     fn expand_location_http_scheme() {
         let result = expand_location("${scheme}://example.com${path}", "/page", None, None, "http");
         assert_eq!(result, "http://example.com/page", "http scheme should be substituted");
+    }
+
+    #[test]
+    fn expand_location_rejects_host_with_slash() {
+        let result = expand_location("https://${host}/page", "/", None, Some("evil.com/redirect"), "https");
+        assert_eq!(
+            result, "https://${host}/page",
+            "host with slash should leave placeholder unexpanded"
+        );
+    }
+
+    #[test]
+    fn expand_location_rejects_host_with_at_sign() {
+        let result = expand_location("https://${host}/page", "/", None, Some("user@evil.com"), "https");
+        assert_eq!(
+            result, "https://${host}/page",
+            "host with @ should leave placeholder unexpanded"
+        );
+    }
+
+    #[test]
+    fn expand_location_rejects_host_with_backslash() {
+        let result = expand_location("https://${host}/page", "/", None, Some("evil.com\\foo"), "https");
+        assert_eq!(
+            result, "https://${host}/page",
+            "host with backslash should leave placeholder unexpanded"
+        );
+    }
+
+    #[test]
+    fn expand_location_rejects_host_with_whitespace() {
+        let result = expand_location("https://${host}/page", "/", None, Some("evil .com"), "https");
+        assert_eq!(
+            result, "https://${host}/page",
+            "host with space should leave placeholder unexpanded"
+        );
+    }
+
+    #[test]
+    fn expand_location_rejects_host_with_newline() {
+        let result = expand_location(
+            "https://${host}/page",
+            "/",
+            None,
+            Some("evil.com\r\nEvil: header"),
+            "https",
+        );
+        assert_eq!(
+            result, "https://${host}/page",
+            "host with CRLF should leave placeholder unexpanded"
+        );
+    }
+
+    #[test]
+    fn expand_location_rejects_host_with_hash() {
+        let result = expand_location("https://${host}/page", "/", None, Some("evil.com#frag"), "https");
+        assert_eq!(
+            result, "https://${host}/page",
+            "host with fragment should leave placeholder unexpanded"
+        );
+    }
+
+    #[test]
+    fn expand_location_rejects_empty_host() {
+        let result = expand_location("https://${host}/page", "/", None, Some(""), "https");
+        assert_eq!(
+            result, "https://${host}/page",
+            "empty host should leave placeholder unexpanded"
+        );
+    }
+
+    #[test]
+    fn expand_location_accepts_ipv4_host() {
+        let result = expand_location("https://${host}/page", "/", None, Some("10.0.0.1"), "https");
+        assert_eq!(result, "https://10.0.0.1/page", "IPv4 address should be accepted");
+    }
+
+    #[test]
+    fn expand_location_accepts_ipv6_host() {
+        let result = expand_location("https://${host}/page", "/", None, Some("[::1]"), "https");
+        assert_eq!(result, "https://[::1]/page", "IPv6 address should be accepted");
+    }
+
+    #[test]
+    fn expand_location_accepts_underscore_host() {
+        let result = expand_location("https://${host}/page", "/", None, Some("my_service.internal"), "https");
+        assert_eq!(
+            result, "https://my_service.internal/page",
+            "underscore in hostname should be accepted"
+        );
+    }
+
+    #[test]
+    fn is_valid_host_rejects_dangerous_characters() {
+        assert!(!is_valid_host_for_redirect(""), "empty");
+        assert!(!is_valid_host_for_redirect("evil/path"), "slash");
+        assert!(!is_valid_host_for_redirect("user@host"), "at sign");
+        assert!(!is_valid_host_for_redirect("host\\path"), "backslash");
+        assert!(!is_valid_host_for_redirect("host name"), "space");
+        assert!(!is_valid_host_for_redirect("host\tname"), "tab");
+        assert!(!is_valid_host_for_redirect("host\nname"), "newline");
+        assert!(!is_valid_host_for_redirect("host\r\nfoo"), "CRLF");
+        assert!(!is_valid_host_for_redirect("host#frag"), "hash");
+        assert!(!is_valid_host_for_redirect("host?query"), "question mark");
+        assert!(!is_valid_host_for_redirect("host<script>"), "angle bracket");
+    }
+
+    #[test]
+    fn is_valid_host_accepts_safe_values() {
+        assert!(is_valid_host_for_redirect("example.com"), "basic domain");
+        assert!(is_valid_host_for_redirect("sub.example.com"), "subdomain");
+        assert!(is_valid_host_for_redirect("my-host.example.com"), "hyphen");
+        assert!(is_valid_host_for_redirect("my_host.internal"), "underscore");
+        assert!(is_valid_host_for_redirect("10.0.0.1"), "IPv4");
+        assert!(is_valid_host_for_redirect("[::1]"), "IPv6 loopback");
+        assert!(is_valid_host_for_redirect("[fe80::1%25eth0]"), "IPv6 zone ID");
+        assert!(is_valid_host_for_redirect("xn--bcher-kva.example"), "punycode IDN");
     }
 
     #[test]
