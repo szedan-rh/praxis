@@ -71,7 +71,7 @@ impl Protocol for PingoraTcp {
                 session_timeout,
                 max_duration,
                 connection_semaphore,
-                config.insecure_options.allow_private_endpoints,
+                config.insecure_options.allow_private_upstreams,
             );
             let mut service = Service::new(service_name, app);
 

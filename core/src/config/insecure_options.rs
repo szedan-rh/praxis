@@ -123,6 +123,7 @@ impl SkipPipelineChecks {
 /// assert!(!opts.allow_open_security_filters);
 /// assert!(!opts.allow_private_endpoints);
 /// assert!(!opts.allow_private_health_checks);
+/// assert!(!opts.allow_private_upstreams);
 /// assert!(!opts.allow_public_admin);
 /// assert!(!opts.allow_root);
 /// assert!(!opts.allow_tls_no_verify);
@@ -156,6 +157,13 @@ pub struct InsecureOptions {
 
     /// Allow health checks to loopback/metadata addresses.
     pub allow_private_health_checks: bool,
+
+    /// Allow upstream connections to resolve to private or reserved IP
+    /// addresses at runtime. Without this flag, DNS-resolved upstream
+    /// addresses in RFC 1918, loopback, link-local, CGNAT, and IPv6
+    /// unique-local ranges are rejected to prevent DNS rebinding and
+    /// SSRF attacks.
+    pub allow_private_upstreams: bool,
 
     /// Allow admin endpoint on non-loopback addresses (`0.0.0.0`, LAN IPs, etc.).
     pub allow_public_admin: bool,
@@ -265,6 +273,10 @@ mod tests {
         assert!(
             !opts.allow_private_health_checks,
             "allow_private_health_checks should default to false"
+        );
+        assert!(
+            !opts.allow_private_upstreams,
+            "allow_private_upstreams should default to false"
         );
         assert!(!opts.allow_public_admin, "allow_public_admin should default to false");
         assert!(!opts.allow_root, "allow_root should default to false");

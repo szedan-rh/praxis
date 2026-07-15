@@ -81,6 +81,7 @@ fn warn_active_insecure_options(opts: &InsecureOptions) {
         ("allow_open_security_filters", opts.allow_open_security_filters),
         ("allow_private_endpoints", opts.allow_private_endpoints),
         ("allow_private_health_checks", opts.allow_private_health_checks),
+        ("allow_private_upstreams", opts.allow_private_upstreams),
         ("allow_public_admin", opts.allow_public_admin),
         ("allow_root", opts.allow_root),
         ("allow_tls_without_sni", opts.allow_tls_without_sni),

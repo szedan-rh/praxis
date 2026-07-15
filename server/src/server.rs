@@ -220,6 +220,7 @@ fn init_runtime_limits(runtime: &praxis_core::config::RuntimeConfig) {
 // -----------------------------------------------------------------------------
 
 /// Emit startup warnings for every active insecure option.
+#[expect(clippy::too_many_lines, reason = "one line per insecure flag")]
 fn warn_insecure_options(config: &Config) {
     let o = &config.insecure_options;
     insecure_warn(
@@ -241,6 +242,10 @@ fn warn_insecure_options(config: &Config) {
     insecure_warn(
         o.allow_private_health_checks,
         "allow_private_health_checks: loopback health checks allowed",
+    );
+    insecure_warn(
+        o.allow_private_upstreams,
+        "allow_private_upstreams: runtime SSRF protection disabled for upstream connections",
     );
     insecure_warn(o.csrf_log_only, "csrf_log_only: CSRF violations logged, not rejected");
     insecure_warn(
