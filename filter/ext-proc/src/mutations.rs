@@ -134,6 +134,10 @@ fn remove_request_headers(names: &[String], ctx: &mut HttpFilterContext<'_>) {
         if is_pseudo_header(name) || is_request_authority(name) {
             continue;
         }
+        if is_reserved_internal_header(name) {
+            tracing::warn!(header = %name, "ext_proc: blocked removal of reserved internal header");
+            continue;
+        }
         if let Ok(header_name) = http::HeaderName::try_from(name.as_str()) {
             ctx.request_headers_to_remove.push(header_name.clone());
             ctx.pre_read_mutations.push(TrustedHeaderMutation::Remove(header_name));
@@ -146,6 +150,10 @@ fn set_request_headers(headers: &[HeaderValueOption], ctx: &mut HttpFilterContex
     for hvo in headers {
         let Some(hv) = &hvo.header else { continue };
         if is_pseudo_header(&hv.key) || is_request_authority(&hv.key) {
+            continue;
+        }
+        if is_reserved_internal_header(&hv.key) {
+            tracing::warn!(header = %hv.key, "ext_proc: blocked set of reserved internal header");
             continue;
         }
         let Ok(name) = http::HeaderName::try_from(hv.key.as_str()) else {
@@ -222,6 +230,10 @@ fn set_response_headers(headers: &[HeaderValueOption], resp: &mut praxis_filter:
         if is_pseudo_header(&hv.key) {
             continue;
         }
+        if is_reserved_internal_header(&hv.key) {
+            tracing::warn!(header = %hv.key, "ext_proc: blocked set of reserved internal header");
+            continue;
+        }
         let Ok(name) = http::HeaderName::try_from(hv.key.as_str()) else {
             continue;
         };
@@ -279,6 +291,10 @@ fn remove_response_headers(names: &[String], resp: &mut praxis_filter::Response)
     let mut modified = false;
     for name in names {
         if is_pseudo_header(name) {
+            continue;
+        }
+        if is_reserved_internal_header(name) {
+            tracing::warn!(header = %name, "ext_proc: blocked removal of reserved internal header");
             continue;
         }
         if let Ok(header_name) = http::HeaderName::try_from(name.as_str())
@@ -349,6 +365,19 @@ pub(crate) fn is_pseudo_header(name: &str) -> bool {
 /// fields on the forwarded request, so request mutations never alter it.
 fn is_request_authority(name: &str) -> bool {
     name.eq_ignore_ascii_case("host")
+}
+
+/// Prefix for Praxis-internal routing and classification headers.
+const RESERVED_HEADER_PREFIX: &str = "x-praxis-";
+
+/// Returns `true` if the header name is a reserved internal Praxis header.
+///
+/// Headers starting with `x-praxis-` are used for internal routing,
+/// classification, and pipeline control. External processors must not
+/// be able to set or remove these headers, as doing so could manipulate
+/// routing decisions, bypass security filters, or escalate privileges.
+fn is_reserved_internal_header(name: &str) -> bool {
+    name.starts_with(RESERVED_HEADER_PREFIX)
 }
 
 /// Build a [`HeaderValue`] proto with the given key and value.
@@ -558,6 +587,116 @@ mod tests {
             "negative status should fall back to 500"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // is_reserved_internal_header
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reserved_header_detected() {
+        assert!(
+            is_reserved_internal_header("x-praxis-route"),
+            "x-praxis-route should be reserved"
+        );
+        assert!(
+            is_reserved_internal_header("x-praxis-"),
+            "x-praxis- prefix alone should be reserved"
+        );
+    }
+
+    #[test]
+    fn non_reserved_header_not_blocked() {
+        assert!(
+            !is_reserved_internal_header("x-custom-header"),
+            "x-custom-header should not be reserved"
+        );
+        assert!(
+            !is_reserved_internal_header("authorization"),
+            "authorization should not be reserved"
+        );
+        assert!(
+            !is_reserved_internal_header("x-praxisnodash"),
+            "x-praxisnodash (no trailing dash) should not be reserved"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Response mutation denylist
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_response_headers_blocks_reserved() {
+        let mut resp = praxis_filter::Response {
+            headers: http::HeaderMap::new(),
+            status: http::StatusCode::OK,
+        };
+        let headers = vec![
+            HeaderValueOption {
+                header: Some(HeaderValue {
+                    key: "x-praxis-route".to_owned(),
+                    value: "evil".to_owned(),
+                    raw_value: Vec::new(),
+                }),
+                append: None,
+                append_action: 0,
+            },
+            HeaderValueOption {
+                header: Some(HeaderValue {
+                    key: "x-safe-header".to_owned(),
+                    value: "ok".to_owned(),
+                    raw_value: Vec::new(),
+                }),
+                append: None,
+                append_action: 0,
+            },
+        ];
+
+        let modified = set_response_headers(&headers, &mut resp);
+
+        assert!(modified, "should report modified for the safe header");
+        assert!(
+            !resp.headers.contains_key("x-praxis-route"),
+            "reserved header should not be set on response"
+        );
+        assert_eq!(
+            resp.headers.get("x-safe-header").map(|v| v.to_str().unwrap()),
+            Some("ok"),
+            "non-reserved header should be set on response"
+        );
+    }
+
+    #[test]
+    fn remove_response_headers_blocks_reserved() {
+        let mut resp = praxis_filter::Response {
+            headers: http::HeaderMap::new(),
+            status: http::StatusCode::OK,
+        };
+        resp.headers.insert(
+            http::HeaderName::from_static("x-praxis-class"),
+            http::HeaderValue::from_static("internal"),
+        );
+        resp.headers.insert(
+            http::HeaderName::from_static("x-removable"),
+            http::HeaderValue::from_static("gone"),
+        );
+
+        let names = vec!["x-praxis-class".to_owned(), "x-removable".to_owned()];
+        let modified = remove_response_headers(&names, &mut resp);
+
+        assert!(modified, "should report modified for the removable header");
+        assert!(
+            resp.headers.contains_key("x-praxis-class"),
+            "reserved header should not be removed from response"
+        );
+        assert!(
+            !resp.headers.contains_key("x-removable"),
+            "non-reserved header should be removed from response"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // immediate_to_rejection
+    // -----------------------------------------------------------------------
 
     #[test]
     fn immediate_to_rejection_with_body() {
