@@ -372,12 +372,19 @@ const RESERVED_HEADER_PREFIX: &str = "x-praxis-";
 
 /// Returns `true` if the header name is a reserved internal Praxis header.
 ///
-/// Headers starting with `x-praxis-` are used for internal routing,
-/// classification, and pipeline control. External processors must not
-/// be able to set or remove these headers, as doing so could manipulate
-/// routing decisions, bypass security filters, or escalate privileges.
+/// Headers starting with `x-praxis-` (case-insensitive) are used for
+/// internal routing, classification, and pipeline control. External
+/// processors must not be able to set or remove these headers, as doing
+/// so could manipulate routing decisions, bypass security filters, or
+/// escalate privileges.
+///
+/// The check is case-insensitive because proto header keys arrive as
+/// arbitrary strings; `http::HeaderName` lowercases them later, so a
+/// mixed-case key like `X-Praxis-Route` would otherwise bypass the
+/// guard and land as `x-praxis-route` in the header map.
 fn is_reserved_internal_header(name: &str) -> bool {
-    name.starts_with(RESERVED_HEADER_PREFIX)
+    name.get(..RESERVED_HEADER_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(RESERVED_HEADER_PREFIX))
 }
 
 /// Build a [`HeaderValue`] proto with the given key and value.
@@ -620,11 +627,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reserved_header_case_insensitive() {
+        assert!(
+            is_reserved_internal_header("X-Praxis-Route"),
+            "mixed-case X-Praxis-Route should be reserved"
+        );
+        assert!(
+            is_reserved_internal_header("X-PRAXIS-FOO"),
+            "upper-case X-PRAXIS-FOO should be reserved"
+        );
+        assert!(
+            is_reserved_internal_header("x-PRAXIS-bar"),
+            "mixed-case x-PRAXIS-bar should be reserved"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Response mutation denylist
     // -----------------------------------------------------------------------
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "test")]
     fn set_response_headers_blocks_reserved() {
         let mut resp = praxis_filter::Response {
             headers: http::HeaderMap::new(),
