@@ -75,44 +75,101 @@ pub fn build_server_config(tls: &ListenerTls) -> Result<Arc<ServerConfig>, TlsEr
     Ok(Arc::new(config))
 }
 
-/// Build a `rustls::ServerConfig` that uses a [`ReloadableCertResolver`]
-/// for hot-reload support.
+/// Result of building a reloadable server config.
 ///
-/// Returns the server config and a shared [`ArcSwap`] handle. The
-/// watcher task stores new certificates into this handle; the
-/// resolver reads from it during TLS handshakes.
+/// Contains the immutable [`ServerConfig`], the cert swap handle,
+/// and an optional client verifier swap handle (when mTLS is
+/// configured).
+///
+/// [`ServerConfig`]: rustls::ServerConfig
+#[cfg(feature = "hot-reload")]
+pub struct ReloadableServerConfig {
+    /// The built server config.
+    pub config: Arc<ServerConfig>,
+
+    /// Handle to swap the server certificate atomically.
+    pub cert_handle: Arc<arc_swap::ArcSwap<rustls::sign::CertifiedKey>>,
+
+    /// Handle to swap the client verifier atomically (mTLS only).
+    pub verifier_handle: Option<Arc<arc_swap::ArcSwap<crate::reload::VerifierState>>>,
+}
+
+/// Build a `rustls::ServerConfig` that uses a
+/// [`ReloadableCertResolver`] for hot-reload support.
+///
+/// Returns a [`ReloadableServerConfig`] containing the server
+/// config and swap handles for both the certificate and (when
+/// mTLS is configured) the client verifier. The watcher task
+/// uses these handles to atomically update TLS state on
+/// filesystem changes.
 ///
 /// # Errors
 ///
-/// Returns [`TlsError`] if the initial certificate cannot be loaded
-/// or the mTLS CA is invalid.
+/// Returns [`TlsError`] if the initial certificate cannot be
+/// loaded or the mTLS CA is invalid.
 ///
 /// [`TlsError`]: crate::TlsError
 /// [`ReloadableCertResolver`]: crate::reload::ReloadableCertResolver
-/// [`ArcSwap`]: arc_swap::ArcSwap
+/// [`ReloadableServerConfig`]: ReloadableServerConfig
 #[cfg(feature = "hot-reload")]
-#[expect(
-    clippy::type_complexity,
-    reason = "return type is inherently complex due to ArcSwap + CertifiedKey"
-)]
-pub fn build_reloadable_server_config(
-    tls: &ListenerTls,
-) -> Result<(Arc<ServerConfig>, Arc<arc_swap::ArcSwap<rustls::sign::CertifiedKey>>), TlsError> {
-    let builder = build_server_config_base(tls)?;
+pub fn build_reloadable_server_config(tls: &ListenerTls) -> Result<ReloadableServerConfig, TlsError> {
+    let builder = build_config_builder(tls)?;
+
+    let (builder, verifier_handle) = if tls.client_cert_mode == ClientCertMode::None {
+        (builder.with_no_client_auth(), None)
+    } else {
+        let ca_cfg = tls.client_ca.as_ref().ok_or(TlsError::MissingClientCa {
+            mode: tls.client_cert_mode,
+        })?;
+        let verifier =
+            crate::reload::ReloadableClientVerifier::new(&ca_cfg.ca_path, tls.client_cert_mode, &ca_cfg.crl_paths)?;
+        let handle = verifier.arc();
+        (builder.with_client_cert_verifier(Arc::new(verifier)), Some(handle))
+    };
 
     let primary = tls.certificates.first().ok_or(TlsError::NoCertificates)?;
     let resolver = crate::reload::ReloadableCertResolver::new(primary)?;
-    let swap_handle = resolver.arc();
+    let cert_handle = resolver.arc();
 
     let mut config = builder.with_cert_resolver(Arc::new(resolver));
     config.alpn_protocols = alpn_protocols();
 
-    Ok((Arc::new(config), swap_handle))
+    Ok(ReloadableServerConfig {
+        config: Arc::new(config),
+        cert_handle,
+        verifier_handle,
+    })
 }
 
 // -----------------------------------------------------------------------------
 // Shared Builder Setup
 // -----------------------------------------------------------------------------
+
+/// Build the protocol-version and cipher-suite portion of a
+/// `ServerConfig`, returning a builder before client auth is
+/// configured.
+///
+/// Used by [`build_reloadable_server_config`] which installs its
+/// own reloadable verifier.
+///
+/// [`build_reloadable_server_config`]: crate::setup::build_reloadable_server_config
+#[cfg(feature = "hot-reload")]
+fn build_config_builder(
+    tls: &ListenerTls,
+) -> Result<rustls::ConfigBuilder<ServerConfig, rustls::WantsVerifier>, TlsError> {
+    let versions = match tls.min_version {
+        Some(TlsVersion::Tls13) => vec![&version::TLS13],
+        Some(TlsVersion::Tls12) | None => {
+            vec![&version::TLS12, &version::TLS13]
+        },
+    };
+    let provider = maybe_filter_provider(default_crypto_provider(), tls.cipher_suites.as_deref())?;
+    ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&versions)
+        .map_err(|e| TlsError::ServerConfigError {
+            detail: format!("failed to set TLS protocol versions: {e}"),
+        })
+}
 
 /// Build the common `ServerConfig` builder: selects TLS versions,
 /// installs the crypto provider, and configures client auth.
@@ -556,12 +613,13 @@ mod tests {
             min_version: None,
         };
 
-        let (config, _swap) = build_reloadable_server_config(&tls).expect("reloadable build should succeed");
+        let result = build_reloadable_server_config(&tls).expect("reloadable build should succeed");
         assert_eq!(
-            config.alpn_protocols,
+            result.config.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()],
             "ALPN should include h2 and http/1.1"
         );
+        assert!(result.verifier_handle.is_none(), "no mTLS means no verifier handle");
     }
 
     // -----------------------------------------------------------------------------
