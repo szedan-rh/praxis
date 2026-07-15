@@ -193,10 +193,12 @@ impl HttpFilter for HeaderFilter {
 
         for (name, value) in &self.request_add {
             trace!(header = %name, "adding request header");
-            if let Some(existing) = ctx.request.headers.get(name)
-                && let Ok(existing_str) = existing.to_str()
+            let existing: Result<Vec<&str>, _> = ctx.request.headers.get_all(name).iter().map(|v| v.to_str()).collect();
+
+            if let Ok(parts) = existing
+                && !parts.is_empty()
             {
-                let combined = format!("{existing_str},{value}");
+                let combined = format!("{},{value}", parts.join(","));
                 if let Ok(combined_val) = http::header::HeaderValue::from_str(&combined) {
                     ctx.request_headers_to_set.push((name.clone(), combined_val));
                     continue;

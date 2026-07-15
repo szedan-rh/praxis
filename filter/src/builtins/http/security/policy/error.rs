@@ -129,7 +129,7 @@ pub(super) fn json_rpc_error_envelope_bytes(
     // an empty body if that ever changes: every caller is a deny path
     // that replaces the response body, so an empty body would weaken
     // (never strengthen) enforcement, and panicking mid-response-phase
-    // (`block_in_place`) is worse still.
+    // is worse still.
     Bytes::from(serde_json::to_vec(&body).unwrap_or_else(|_| FALLBACK_DENY_ENVELOPE.to_vec()))
 }
 
