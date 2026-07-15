@@ -9,6 +9,8 @@
 //! [`reload_pipelines`]: crate::reload::reload_pipelines
 
 use std::{
+    collections::hash_map::DefaultHasher,
+    hash::Hasher as _,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -109,6 +111,7 @@ async fn watch_loop(params: WatcherParams) {
 /// Process filesystem events until shutdown is requested.
 async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
     let mut current_config = params.initial_config.clone();
+    let mut content_hash = std::fs::read_to_string(&params.config_path).map_or(0, |c| hash_content(&c));
     loop {
         tokio::select! {
             Some(()) = rx.recv() => {
@@ -117,6 +120,7 @@ async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
                 handle_reload(
                     &params.config_path,
                     &mut current_config,
+                    &mut content_hash,
                     &params.registry,
                     &params.pipelines,
                     &params.health_shutdown,
@@ -131,7 +135,7 @@ async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
     }
 }
 
-/// Read the config file, parse it, and attempt a reload.
+/// Read the config file and reload pipelines if content has changed.
 #[expect(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -140,6 +144,7 @@ async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
 fn handle_reload(
     config_path: &PathBuf,
     current_config: &mut Config,
+    content_hash: &mut u64,
     registry: &FilterRegistry,
     pipelines: &ListenerPipelines,
     health_shutdown: &Arc<Mutex<CancellationToken>>,
@@ -156,6 +161,12 @@ fn handle_reload(
             return;
         },
     };
+
+    let new_hash = hash_content(&content);
+    if new_hash == *content_hash {
+        tracing::debug!("config file content unchanged, skipping reload");
+        return;
+    }
 
     let new_config = match Config::from_yaml(&content) {
         Ok(c) => c,
@@ -179,6 +190,7 @@ fn handle_reload(
     ) {
         Ok(()) => {
             *current_config = new_config;
+            *content_hash = new_hash;
         },
         Err(e) => {
             error!(error = %e, "config reload failed");
@@ -226,6 +238,13 @@ fn watch_dir_for_path(path: &std::path::Path) -> PathBuf {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf()
+}
+
+/// Compute a hash of file content for change detection.
+fn hash_content(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hasher.write(content.as_bytes());
+    hasher.finish()
 }
 
 // -----------------------------------------------------------------------------
@@ -455,6 +474,73 @@ mod tests {
         }
         shutdown.cancel();
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn hash_content_deterministic() {
+        let a = hash_content("hello world");
+        let b = hash_content("hello world");
+        assert_eq!(a, b, "same content should produce the same hash");
+    }
+
+    #[test]
+    fn hash_content_differs_for_different_input() {
+        let a = hash_content("status: 200");
+        let b = hash_content("status: 201");
+        assert_ne!(a, b, "different content should produce different hashes");
+    }
+
+    #[test]
+    fn watcher_skips_reload_on_unchanged_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("praxis.yaml");
+        std::fs::write(&config_path, VALID_YAML).unwrap();
+
+        let config = Config::from_yaml(VALID_YAML).unwrap();
+        let registry = Arc::new(FilterRegistry::with_builtins());
+        let health_registry = Arc::new(std::collections::HashMap::new());
+        let kv_stores = praxis_core::kv::KvStoreRegistry::new();
+        let pipelines =
+            Arc::new(crate::pipelines::resolve_pipelines(&config, &registry, &health_registry, &kv_stores).unwrap());
+        let old_ptr = Arc::as_ptr(&pipelines.get("web").unwrap().load());
+        let health_shutdown = Arc::new(Mutex::new(CancellationToken::new()));
+        let shutdown = CancellationToken::new();
+
+        let _handle = spawn_config_watcher(WatcherParams {
+            config_path: config_path.clone(),
+            health_shutdown,
+            initial_config: config,
+            kv_stores: praxis_core::kv::KvStoreRegistry::new(),
+            pipelines: Arc::clone(&pipelines),
+            registry: Arc::clone(&registry),
+            shutdown: shutdown.clone(),
+        });
+
+        std::thread::sleep(Duration::from_millis(WATCHER_STARTUP_MS));
+
+        std::fs::write(&config_path, VALID_YAML).unwrap();
+
+        std::thread::sleep(Duration::from_millis(DEBOUNCE_MS * 3));
+
+        let current_ptr = Arc::as_ptr(&pipelines.get("web").unwrap().load());
+        assert_eq!(
+            old_ptr, current_ptr,
+            "pipeline should not be swapped when content is unchanged"
+        );
+
+        std::fs::write(&config_path, VALID_YAML_CHANGED).unwrap();
+
+        poll_until(Duration::from_secs(5), || {
+            Arc::as_ptr(&pipelines.get("web").unwrap().load()) != old_ptr
+        });
+
+        let new_ptr = Arc::as_ptr(&pipelines.get("web").unwrap().load());
+        assert_ne!(
+            old_ptr, new_ptr,
+            "pipeline should be swapped after actual content change"
+        );
+
+        shutdown.cancel();
     }
 
     // -------------------------------------------------------------------------
