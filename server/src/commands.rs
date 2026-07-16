@@ -76,10 +76,6 @@ fn default_config_source() -> String {
 mod tests {
     use super::*;
 
-    fn example_config_path(filename: &str) -> String {
-        format!("{}/../examples/configs/{filename}", env!("CARGO_MANIFEST_DIR"),)
-    }
-
     #[test]
     fn load_and_validate_for_cli_with_valid_config() {
         let path = example_config_path("traffic-management/basic-reverse-proxy.yaml");
@@ -208,5 +204,13 @@ filter_chains:
             err.contains("nonexistent_chain"),
             "error should mention the missing chain name: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test Utilities
+    // -----------------------------------------------------------------------
+
+    fn example_config_path(filename: &str) -> String {
+        format!("{}/../examples/configs/{filename}", env!("CARGO_MANIFEST_DIR"),)
     }
 }
