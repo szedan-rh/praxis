@@ -114,6 +114,24 @@ async fn watch_loop(params: WatcherParams) {
     run_event_loop(&mut rx, &params).await;
 }
 
+/// Whether the backoff period has elapsed since the last failure.
+fn should_skip_for_backoff(consecutive_failures: u32, last_failure: Option<Instant>) -> bool {
+    let Some(last) = last_failure else { return false };
+    let backoff = backoff_duration(consecutive_failures);
+    let elapsed = last.elapsed();
+    if elapsed < backoff {
+        let remaining = backoff - elapsed;
+        warn!(
+            consecutive_failures,
+            backoff_secs = backoff.as_secs(),
+            remaining_secs = remaining.as_secs(),
+            "config reload skipped, backing off after repeated failures",
+        );
+        return true;
+    }
+    false
+}
+
 /// Process filesystem events until shutdown is requested.
 async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
     let mut current_config = params.initial_config.clone();
@@ -124,41 +142,19 @@ async fn run_event_loop(rx: &mut mpsc::Receiver<()>, params: &WatcherParams) {
     loop {
         tokio::select! {
             Some(()) = rx.recv() => {
-                tracing::debug!(
-                    debounce_ms = DEBOUNCE_MS,
-                    "config file change detected, debouncing",
-                );
+                tracing::debug!(debounce_ms = DEBOUNCE_MS, "config file change detected, debouncing");
                 drain_and_debounce(rx).await;
 
-                if let Some(last) = last_failure {
-                    let backoff = backoff_duration(consecutive_failures);
-                    let elapsed = last.elapsed();
-                    if elapsed < backoff {
-                        let remaining = backoff - elapsed;
-                        warn!(
-                            consecutive_failures,
-                            backoff_secs = backoff.as_secs(),
-                            remaining_secs = remaining.as_secs(),
-                            "config reload skipped, backing off after repeated failures",
-                        );
-                        continue;
-                    }
+                if should_skip_for_backoff(consecutive_failures, last_failure) {
+                    continue;
                 }
 
                 let ok = handle_reload(
-                    &params.config_path,
-                    &mut current_config,
-                    &mut content_hash,
-                    &params.registry,
-                    &params.pipelines,
-                    &params.health_shutdown,
-                    &params.kv_stores,
+                    &params.config_path, &mut current_config, &mut content_hash,
+                    &params.registry, &params.pipelines, &params.health_shutdown, &params.kv_stores,
                 );
-
-                if ok {
-                    consecutive_failures = 0;
-                    last_failure = None;
-                } else {
+                if ok { consecutive_failures = 0; last_failure = None; }
+                else {
                     consecutive_failures = consecutive_failures.saturating_add(1);
                     last_failure = Some(Instant::now());
                 }
@@ -293,7 +289,7 @@ fn watch_dir_for_path(path: &std::path::Path) -> PathBuf {
 fn backoff_duration(consecutive_failures: u32) -> Duration {
     let exp = consecutive_failures.saturating_sub(1).min(63);
     let secs = BACKOFF_BASE_SECS
-        .saturating_mul(1u64.checked_shl(exp).unwrap_or(u64::MAX))
+        .saturating_mul(1_u64.checked_shl(exp).unwrap_or(u64::MAX))
         .min(BACKOFF_MAX_SECS);
     Duration::from_secs(secs)
 }
